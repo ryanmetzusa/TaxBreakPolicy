@@ -1,0 +1,126 @@
+---
+title: "Difference-in-Differences"
+author: "Ryan Metz"
+date: "MSBA Data Analytics III"
+output: html_document
+---
+
+Difference-in-Differences
+
+The data are about the expansion of the Earned Income Tax Credit. The sample only contains single women. This legislation is aimed at providing a tax break for low income individuals.  For some background on the subject, see
+
+Eissa, Nada, and Jeffrey B. Liebman. 1996. Labor Supply Responses to the Earned Income Tax Credit. Quarterly Journal of Economics. 111(2): 605-637.
+
+__Big Hint: Most of the code you need is in the notes__
+
+The homework questions:
+
+1. Provide Descriptive Statistics for the data. Format nicely, not just R printout. Here is an example below.
+
+```{r}
+
+library(modelsummary)
+config_modelsummary(factory_default = "markdown")
+library(haven)
+eitc <- read_dta("eitc.dta")
+eitc <- data.frame(eitc)
+names(eitc)<-c("State","Year","URate","Children","Non_White","FamilyIncome","Earn","Age","Education","Work","UnearnedIncome")
+datasummary(All(eitc) ~ Mean + SD + Min + Max,
+            data = eitc,
+            output = 'markdown')
+```
+
+
+2. Calculate the sample means of all variables for (a) single women with no children, (b) single women with 1 child, and (c) single women with 2+ children. __Hint: Use the tidyverse to make this table. You can either filter the data or use dplyr to construct groups.You can even use datasummary to do this step. Below is one example__
+
+
+```{r}
+eitc$cgroups <- eitc$Children
+eitc$cgroups[eitc$Children>1] <- 2
+eitc$cgroups <- factor(eitc$cgroups, labels = c("No Children","One Child","Two or More Children"))
+
+datasummary(All(eitc) ~ mean * cgroups, data = eitc)
+```
+
+
+3. Create a new variable with earnings conditional on working (missing for non-employed) and calculate the means of this by group as well.
+```{r}
+datasummary(Earn ~ mean * cgroups, data = eitc[eitc$Work== 1, ])
+```
+
+4. Construct a variable for the "treatment" called ANYKIDS and a variable for after the expansion (called POST93-should be 1 for 1994 and later).
+```{r}
+eitc$ANYKIDS <- ifelse(eitc$Children>0,1,0)
+eitc$POST93 <- ifelse(eitc$Year>1993,1,0)
+```
+
+5. Create a graph which plots mean annual employment rates by year (1991-1996) for single women with children (treatment) and without children (control). __Hint: you should have two lines on the same graph.__ I would suggest to use ggplot to make this plot. Here is some sample code.
+
+
+```{r}
+minfo = aggregate(eitc$Work, list(eitc$Year,eitc$ANYKIDS == 1), mean)
+
+names(minfo) = c("YR","Treatment","LFPR")
+
+minfo$Group[1:6] = "Single women, no children"
+minfo$Group[7:12] = "Single women, children"
+
+require(ggplot2) 
+qplot(YR, LFPR, data=minfo, geom=c("point","line"), colour=Group,
+xlab="Year", ylab="Labor Force Participation Rate")+geom_vline(xintercept = 1994)
+
+```
+
+
+6. Calculate the unconditional difference-in-difference estimates of the effect of the 1993 EITC expansion on employment of single women. __Hint: This means calculate the DID treatment effect by just subtracting means (i.e. no regression)__
+```{r}
+a = sapply(subset(eitc, POST93 == 0 & ANYKIDS == 0, select=Work), mean)
+b = sapply(subset(eitc, POST93 == 0 & ANYKIDS == 1, select=Work), mean)
+c = sapply(subset(eitc, POST93 == 1 & ANYKIDS == 0, select=Work), mean)
+d = sapply(subset(eitc, POST93 == 1 & ANYKIDS == 1, select=Work), mean)
+(d-c)-(b-a)
+```
+
+7. Now run a regression to estimate the conditional difference-in-difference estimate of the effect of the EITC. Use all women with children as the treatment group. __Hint: your answers for 6 and 7 should match.__
+```{r}
+reg1 = lm(Work ~ POST93 + ANYKIDS + POST93*ANYKIDS, data = eitc)
+modelsummary(reg1, coef_rename = c(ANYKIDS ="KIDS", POST93 = "Post1993"))
+```
+
+8. Re-estimate this model including demographic characteristics. These are characteristics of the person.
+```{r}
+reg2 = lm(Work ~ Non_White + FamilyIncome + Age + Education + POST93 + ANYKIDS + POST93*ANYKIDS, data = eitc)
+modelsummary(list(reg1,reg2), stars = TRUE, coef_rename = c(ANYKIDS ="KIDS", POST93 = "Post1993", Non_White = "Non-White"))
+```
+
+9. Add the state unemployment rate and allow its effect to vary by the presence of children __(i.e you need an interaction term).__
+```{r}
+reg3 = lm(Work ~ URate + Non_White + FamilyIncome + Age + Education + POST93 + ANYKIDS + POST93*ANYKIDS + URate*ANYKIDS, data = eitc)
+modelsummary(list(reg1,reg2,reg3), stars = TRUE, coef_rename = c(Non_White="Non White",ANYKIDS ="KIDS", POST93 = "Post1993",URate = "State Unemployment Rate"))
+```
+
+10. Return to your original equation in part 8. Estimate a "placebo" treatment model. Take data from only the pre-reform period. Use the same treatment and control groups. Introduce a placebo policy that begins in 1992 (so 1992 and 1993 both have this fake policy).
+```{r}
+eitc$placebo <- ifelse(eitc$Year>1991,1,0)
+
+reg4 = lm(Work ~ Non_White + FamilyIncome + Age + Education + placebo + ANYKIDS + placebo*ANYKIDS, data = eitc[eitc$POST93==0, ])
+modelsummary(list(reg3,reg4), stars = TRUE, coef_rename = c(Non_White="Non White", URate = "State Unemployment Rate", ANYKIDS ="KIDS", POST93 = "Post1993", placebo = "Placebo"))
+```
+\newpage
+
+| Variable Name | Description                                                            |
+|----------------------------|--------------------------------------------|
+| State             | State of Residence                                          |
+| Year              | Tax year.                                                   |
+| URate             | Unemployment Rate of State                                  |
+| Children          | Number of Children                                          |
+| Non_White         | Equals 1 for African-American/Hispanic and 0 White          |
+| FamilyIncome      | Family Income.                                              |
+| Earn              | Annual Earnings of Family                                   |
+| Age               | Age of Woman                                                |
+| Education         | Years of Education                                          |
+| Work              | 1 if employed within 1 year 0 otherwise                     |
+| UnearnedIncome    | Unearned Income                                             |
+| State Unemployment Rate| State of Residence                                          |
+| Post1993 | 1 if 1994 or more 0 otherwise                                         |
+| KIDS            | 1 if they have a child 0 otherwise                                         |
